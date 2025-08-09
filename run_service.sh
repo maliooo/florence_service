@@ -1,0 +1,2 @@
+cd /home/zhangxuqi/malio/code/service
+nohup /root/miniconda3/envs/easy_animate/bin/python /home/zhangxuqi/malio/code/service/src/florence_api.py > /home/zhangxuqi/malio/code/service/logs/florence_api.log 2>&1 &

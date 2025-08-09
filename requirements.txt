@@ -1,0 +1,3 @@
+# 在安装controlnet-service 之后，需要安装以下依赖
+einops
+timm
