@@ -8,6 +8,7 @@ from PIL import Image
 import time
 from rich import print
 from pathlib import Path
+import traceback
 
 def test_health(base_url):
     """测试健康检查接口"""
@@ -51,6 +52,7 @@ def analyze_image(base_url, image_path, request_type="<DETAILED_CAPTION>", max_t
         return response.json()
     except Exception as e:
         print(f"[red]分析图片失败: {e}[/red]")
+        print(traceback.format_exc())
         return None
     finally:
         # 关闭文件

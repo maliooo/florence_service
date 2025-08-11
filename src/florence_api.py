@@ -29,7 +29,7 @@ PROMPT_TASK_LIST = [
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_dir", type=str, default=Path(__file__).parents[1] / "models/Florence-2-large")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=28001)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--weight_type", type=str, default="fp16", choices=["fp16", "auto"])
@@ -71,14 +71,17 @@ if args.weight_type == "fp16":
     model = AutoModelForCausalLM.from_pretrained(
                 pretrained_model_name_or_path=args.model_dir, 
                 trust_remote_code=True,
-                local_files_only=True
-            ).to(torch.float16).to(args.device).eval()  # 加载模型, fp16
+                local_files_only=True,
+                attn_implementation="sdpa",  # 可以选 eager, flash_attention_2, sdpa
+                torch_dtype=torch.float16,
+            ).to(args.device).eval()  # 加载模型, fp16
     print(f"[bold green]加载模型成功，模型类型为：{type(model)}, model_device为：{model.device}, model_dtype为：{model.dtype}[/bold green]")
 else:
     model = AutoModelForCausalLM.from_pretrained(
                 pretrained_model_name_or_path=args.model_dir, 
                 trust_remote_code=True,
-                local_files_only=True
+                local_files_only=True,
+                attn_implementation="sdpa"  # 可以选 eager, flash_attention_2, sdpa
             ).to(args.device).eval()  # 加载模型, fp16
     print(f"[bold green]加载模型成功，模型类型为：{type(model)}, model_device为：{model.device}, model_dtype为：{model.dtype}[/bold green]")
 processor = AutoProcessor.from_pretrained(args.model_dir, trust_remote_code=True, local_files_only=True)
