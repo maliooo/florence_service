@@ -14,6 +14,7 @@ from pathlib import Path
 import asyncio
 import base64
 
+
 # 参考：https://huggingface.co/microsoft/Florence-2-large/blob/main/sample_inference.ipynb
 PROMPT_TASK_LIST = [
     "<CAPTION>", 
@@ -23,7 +24,18 @@ PROMPT_TASK_LIST = [
     "<DENSE_REGION_CAPTION>", 
     "<REGION_PROPOSAL>", 
     "<CAPTION_TO_PHRASE_GROUNDING>", 
-    "<REFERRING_EXPRESSION_SEGMENTATION>"
+    "<REFERRING_EXPRESSION_SEGMENTATION>",
+    "<REGION_TO_SEGMENTATION>",
+    "<OPEN_VOCABULARY_DETECTION>",
+    "<REGION_TO_CATEGORY>",
+    "<REGION_TO_DESCRIPTION>",
+    "<OCR>",
+    "<OCR_WITH_REGION>",
+    "<DESCRIPTION>",
+    "<GENERATE_TAGS>",
+    "<MIXED_CAPTION>",
+    "<MIXED_CAPTION_PLUS>",
+    "<<ANALYZE>>",
 ]
 
 def parse_args():
@@ -32,6 +44,7 @@ def parse_args():
     parser.add_argument("--port", type=int, default=28001)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("--device_id", type=int, default=0)
     parser.add_argument("--weight_type", type=str, default="fp16", choices=["fp16", "auto"])
     parser.add_argument("--prompt_task", type=str, default="<MORE_DETAILED_CAPTION>", choices=PROMPT_TASK_LIST)
     parser.add_argument("--max_tokens", type=int, default=1024)
@@ -55,6 +68,9 @@ class ImageBase64RequestData(BaseModel):
     user_id: Optional[str] = None
     request_type: Optional[str] = args.prompt_task
     max_tokens: Optional[int] = args.max_tokens
+    early_stopping: Optional[bool] = False
+    num_beams: Optional[int] = 3
+    do_sample: Optional[bool] = False
 
 app = FastAPI(title="Florence 图像描述 API")
 
@@ -70,11 +86,11 @@ app.add_middleware(
 if args.weight_type == "fp16":
     model = AutoModelForCausalLM.from_pretrained(
                 pretrained_model_name_or_path=args.model_dir, 
-                trust_remote_code=True,
+                trust_remote_code=True, 
                 local_files_only=True,
                 attn_implementation="sdpa",  # 可以选 eager, flash_attention_2, sdpa
                 torch_dtype=torch.float16,
-            ).to(args.device).eval()  # 加载模型, fp16
+            ).to(f"cuda:{args.device_id}").eval()  # 加载模型, fp16
     print(f"[bold green]加载模型成功，模型类型为：{type(model)}, model_device为：{model.device}, model_dtype为：{model.dtype}[/bold green]")
 else:
     model = AutoModelForCausalLM.from_pretrained(
@@ -82,7 +98,7 @@ else:
                 trust_remote_code=True,
                 local_files_only=True,
                 attn_implementation="sdpa"  # 可以选 eager, flash_attention_2, sdpa
-            ).to(args.device).eval()  # 加载模型, fp16
+            ).to(f"cuda:{args.device_id}").eval()  # 加载模型, fp16
     print(f"[bold green]加载模型成功，模型类型为：{type(model)}, model_device为：{model.device}, model_dtype为：{model.dtype}[/bold green]")
 processor = AutoProcessor.from_pretrained(args.model_dir, trust_remote_code=True, local_files_only=True)
 
@@ -97,13 +113,19 @@ def get_image_request_data(
     description: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None),
     request_type: Optional[str] = Form(args.prompt_task),
-    max_tokens: Optional[int] = Form(args.max_tokens)
+    max_tokens: Optional[int] = Form(args.max_tokens),
+    early_stopping: Optional[bool] = Form(False),
+    num_beams: Optional[int] = Form(3),
+    do_sample: Optional[bool] = Form(False)
 ) -> ImageRequestData:
     return ImageRequestData(
         description=description,
         user_id=user_id,
         request_type=request_type,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
+        early_stopping=early_stopping,
+        num_beams=num_beams,
+        do_sample=do_sample
     )
 
 @app.post("/analyze_image", response_model=dict)
@@ -132,9 +154,9 @@ async def analyze_image(
             # 处理图像并生成描述
             inputs = processor(text=[prompt], images=[image], return_tensors="pt")
             if args.weight_type == "fp16":
-                inputs = inputs.to(torch.float16).to(args.device)
+                inputs = inputs.to(torch.float16).to(f"cuda:{args.device_id}")
             else:
-                inputs = inputs.to(args.device)
+                inputs = inputs.to(f"cuda:{args.device_id}")
             
             # 生成描述
             with torch.no_grad():
@@ -209,9 +231,9 @@ async def analyze_image_base64(request_data: ImageBase64RequestData):
             # 处理图像并生成描述
             inputs = processor(text=[prompt], images=[image], return_tensors="pt")
             if args.weight_type == "fp16":
-                inputs = inputs.to(torch.float16).to(args.device)
+                inputs = inputs.to(torch.float16).to(f"cuda:{args.device_id}")
             else:
-                inputs = inputs.to(args.device)
+                inputs = inputs.to(f"cuda:{args.device_id}")
             
             # 生成描述
             with torch.no_grad():
@@ -219,8 +241,9 @@ async def analyze_image_base64(request_data: ImageBase64RequestData):
                     input_ids=inputs["input_ids"],
                     pixel_values=inputs["pixel_values"],
                     max_new_tokens=request_data.max_tokens,
-                    do_sample=False,
-                    num_beams=3,
+                    do_sample=request_data.do_sample,
+                    num_beams=request_data.num_beams,
+                    early_stopping=request_data.early_stopping,
                 )
             
             # 解码输出
@@ -231,6 +254,7 @@ async def analyze_image_base64(request_data: ImageBase64RequestData):
                 image_size=(image.width, image.height)
             )
             print(f"[bold green]解析后的结果为：{parsed_answer}[/bold green]")
+            print(f"[yellow]任务类型为：{request_data.request_type}， 消耗时间为：{time.time() - t1:.2f}s[/yellow]")
 
             # 返回结果
             return {
